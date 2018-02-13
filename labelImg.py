@@ -277,7 +277,7 @@ class MainWindow(QMainWindow, WindowMixin):
         toggle_buttons = []
         for i, btn in enumerate(self.attr_buttons):
             toggle_buttons.append(action('Toggle Attribute ' + btn.text(), partial(self.toggleAttrButtn, btn),
-                   str(i+1), 'hide', u'Helloo',
+                   str(i+1), 'hide', u'Toggle',
                    enabled=False))
 
         help = action('&Tutorial', self.showTutorialDialog, None, 'help', u'Show demos')
