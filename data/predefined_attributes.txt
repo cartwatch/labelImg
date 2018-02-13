@@ -1,4 +1,2 @@
 difficult
 unclear
-full
-confidence
