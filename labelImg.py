@@ -280,10 +280,6 @@ class MainWindow(QMainWindow, WindowMixin):
                    str(i+1), 'hide', u'Helloo',
                    enabled=False))
 
-        showAll = action('&Show\nRectBox', partial(self.togglePolygons, True),
-                         'Ctrl+A', 'hide', u'Show all Boxs',
-                         enabled=False)
-
         help = action('&Tutorial', self.showTutorialDialog, None, 'help', u'Show demos')
         showInfo = action('&Information', self.showInfoDialog, None, 'help', u'Information')
 
