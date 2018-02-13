@@ -655,11 +655,9 @@ class MainWindow(QMainWindow, WindowMixin):
 
         try:
             shape = self.itemsToShapes[item]
+            if shape:
+                self.update_shape_attribute(shape, caller.text(), caller.isChecked())
         except:
-            pass
-        if 'shape' in locals():
-            self.update_shape_attribute(shape, caller.text(), caller.isChecked())
-        else:
             pass
 
     def toggleAttrButtn(self, btn):
@@ -1391,7 +1389,6 @@ def get_main_app(argv=[]):
                      argv[3] if len(argv) >= 4 else os.path.join(
                          os.path.dirname(sys.argv[0]),
                          'data', 'predefined_attributes.txt'))
-    win.show()
     win.show()
     return app, win
 
