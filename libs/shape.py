@@ -37,12 +37,12 @@ class Shape(object):
     point_size = 8
     scale = 1.0
 
-    def __init__(self, label=None, line_color=None,difficult = False):
+    def __init__(self, label=None, line_color=None, attributes={}):
         self.label = label
         self.points = []
         self.fill = False
         self.selected = False
-        self.difficult = difficult
+        self.attributes = attributes
 
         self._highlightIndex = None
         self._highlightMode = self.NEAR_VERTEX
@@ -185,7 +185,7 @@ class Shape(object):
             shape.line_color = self.line_color
         if self.fill_color != Shape.fill_color:
             shape.fill_color = self.fill_color
-        shape.difficult = self.difficult
+        shape.attributes = self.attributes.copy()
         return shape
 
     def __len__(self):

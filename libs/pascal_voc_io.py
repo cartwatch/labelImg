@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # -*- coding: utf8 -*-
-import sys
+
 from xml.etree import ElementTree
 from xml.etree.ElementTree import Element, SubElement
 from lxml import etree
@@ -9,9 +9,9 @@ import codecs
 XML_EXT = '.xml'
 ENCODE_METHOD = 'utf-8'
 
-class PascalVocWriter:
 
-    def __init__(self, foldername, filename, imgSize,databaseSrc='Unknown', localImgPath=None):
+class PascalVocWriter:
+    def __init__(self, foldername, filename, imgSize, databaseSrc='Unknown', localImgPath=None):
         self.foldername = foldername
         self.filename = filename
         self.databaseSrc = databaseSrc
@@ -26,7 +26,8 @@ class PascalVocWriter:
         """
         rough_string = ElementTree.tostring(elem, 'utf8')
         root = etree.fromstring(rough_string)
-        return etree.tostring(root, pretty_print=True, encoding=ENCODE_METHOD).replace("  ".encode(), "\t".encode())
+        tree = etree.tostring(root, pretty_print=True, encoding=ENCODE_METHOD)
+        return tree.replace("  ".encode(), "\t".encode())
         # minidom does not support UTF-8
         '''reparsed = minidom.parseString(rough_string)
         return reparsed.toprettyxml(indent="\t", encoding=ENCODE_METHOD)'''
@@ -63,8 +64,8 @@ class PascalVocWriter:
         width = SubElement(size_part, 'width')
         height = SubElement(size_part, 'height')
         depth = SubElement(size_part, 'depth')
-        width.text = str(self.imgSize[1])
         height.text = str(self.imgSize[0])
+        width.text = str(self.imgSize[1])
         if len(self.imgSize) == 3:
             depth.text = str(self.imgSize[2])
         else:
@@ -74,41 +75,41 @@ class PascalVocWriter:
         segmented.text = '0'
         return top
 
-    def addBndBox(self, xmin, ymin, xmax, ymax, name, difficult):
+    def addBndBox(self, xmin, ymin, xmax, ymax, name, attrs={}):
         bndbox = {'xmin': xmin, 'ymin': ymin, 'xmax': xmax, 'ymax': ymax}
         bndbox['name'] = name
-        bndbox['difficult'] = difficult
+
+        bndbox.update(attrs)
         self.boxlist.append(bndbox)
 
     def appendObjects(self, top):
-        for each_object in self.boxlist:
+        for obj in self.boxlist:
             object_item = SubElement(top, 'object')
             name = SubElement(object_item, 'name')
-            try:
-                name.text = unicode(each_object['name'])
-            except NameError:
-                # Py3: NameError: name 'unicode' is not defined
-                name.text = each_object['name']
+            name.text = obj['name']
+
             pose = SubElement(object_item, 'pose')
             pose.text = "Unspecified"
+
+            is_truncated = (
+                int(obj['ymax']) == int(self.imgSize[0]) or
+                int(obj['xmax']) == int(self.imgSize[1]) or
+                int(obj['ymin']) == 1 or int(obj['xmin']) == 1
+            )
+
             truncated = SubElement(object_item, 'truncated')
-            if int(each_object['ymax']) == int(self.imgSize[0]) or (int(each_object['ymin'])== 1):
-                truncated.text = "1" # max == height or min
-            elif (int(each_object['xmax'])==int(self.imgSize[1])) or (int(each_object['xmin'])== 1):
-                truncated.text = "1" # max == width or min
-            else:
-                truncated.text = "0"
-            difficult = SubElement(object_item, 'difficult')
-            difficult.text = str( bool(each_object['difficult']) & 1 )
+            truncated.text = parse_bool(is_truncated)
+
             bndbox = SubElement(object_item, 'bndbox')
-            xmin = SubElement(bndbox, 'xmin')
-            xmin.text = str(each_object['xmin'])
-            ymin = SubElement(bndbox, 'ymin')
-            ymin.text = str(each_object['ymin'])
-            xmax = SubElement(bndbox, 'xmax')
-            xmax.text = str(each_object['xmax'])
-            ymax = SubElement(bndbox, 'ymax')
-            ymax.text = str(each_object['ymax'])
+
+            for key, value in obj.items():
+
+                if key in ['xmin', 'ymin', 'xmax', 'ymax', 'name']:
+                    e = SubElement(bndbox, key)
+                    e.text = str(obj[key])
+                elif key not in ['truncated', 'pose']:
+                    attr = SubElement(object_item, key)
+                    attr.text = parse_bool(value)
 
     def save(self, targetFile=None):
         root = self.genXML()
@@ -129,31 +130,29 @@ class PascalVocReader:
 
     def __init__(self, filepath):
         # shapes type:
-        # [labbel, [(x1,y1), (x2,y2), (x3,y3), (x4,y4)], color, color, difficult]
+        # [label, [(x1,y1), (x2,y2), (x3,y3), (x4,y4)], color, color, difficult]
         self.shapes = []
+        self.size = {}
         self.filepath = filepath
         self.verified = False
+        self.original_path = None
+
         try:
             self.parseXML()
-        except:
-            pass
+        except Exception as e:
+            print(e)
 
     def getShapes(self):
         return self.shapes
 
-    def addShape(self, label, bndbox, difficult):
-        xmin = int(bndbox.find('xmin').text)
-        ymin = int(bndbox.find('ymin').text)
-        xmax = int(bndbox.find('xmax').text)
-        ymax = int(bndbox.find('ymax').text)
-        points = [(xmin, ymin), (xmax, ymin), (xmax, ymax), (xmin, ymax)]
-        self.shapes.append((label, points, None, None, difficult))
+    def getSize(self):
+        return self.size
 
     def parseXML(self):
         assert self.filepath.endswith(XML_EXT), "Unsupport file format"
         parser = etree.XMLParser(encoding=ENCODE_METHOD)
         xmltree = ElementTree.parse(self.filepath, parser=parser).getroot()
-        filename = xmltree.find('filename').text
+        # filename = xmltree.find('filename').text
         try:
             verified = xmltree.attrib['verified']
             if verified == 'yes':
@@ -161,12 +160,43 @@ class PascalVocReader:
         except KeyError:
             self.verified = False
 
-        for object_iter in xmltree.findall('object'):
-            bndbox = object_iter.find("bndbox")
-            label = object_iter.find('name').text
-            # Add chris
-            difficult = False
-            if object_iter.find('difficult') is not None:
-                difficult = bool(int(object_iter.find('difficult').text))
-            self.addShape(label, bndbox, difficult)
+        self.original_path = xmltree.find('path').text
+        self.original_filename = xmltree.find('filename').text
+
+        size = xmltree.find('size')
+        self.size['width'] = int(size.find('width').text)
+        self.size['height'] = int(size.find('height').text)
+        self.size['depth'] = int(size.find('depth').text)
+
+        for obj in xmltree.findall('object'):
+            corners = dict(xmin=0, ymin=0, xmax=0, ymax=0)
+            attrs = dict(difficult=False)
+
+            for elem in obj.iter():
+                t = elem.tag
+                print(t)
+                if t in ['bndbox', 'object']:
+                    continue
+                elif t in corners.keys():
+                    corners[t] = int(elem.text)
+                elif t == 'name':
+                    label = elem.text
+                elif t == 'pose':
+                    attrs[t] = elem.text
+                elif t == 'confidence':
+                    attrs[t] = float(elem.text)
+                else:
+                    attrs[t] = bool(int(elem.text))
+
+            points = [(corners['xmin'], corners['ymin']),
+                      (corners['xmax'], corners['ymin']),
+                      (corners['xmax'], corners['ymax']),
+                      (corners['xmin'], corners['ymax'])]
+
+            self.shapes.append((label, points, None, None, attrs))
+
         return True
+
+
+def parse_bool(val):
+    return str(int(bool(val)))
