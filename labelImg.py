@@ -85,7 +85,7 @@ class HashableQListWidgetItem(QListWidgetItem):
 class MainWindow(QMainWindow, WindowMixin):
     FIT_WINDOW, FIT_WIDTH, MANUAL_ZOOM = list(range(3))
 
-    def __init__(self, defaultFilename=None, defaultPrefdefClassFile=None):
+    def __init__(self, defaultFilename=None, defaultPrefdefClassFile=None, defaultPrefdefAttrFile=None):
         super(MainWindow, self).__init__()
         self.setWindowTitle(__appname__)
 
@@ -113,6 +113,7 @@ class MainWindow(QMainWindow, WindowMixin):
 
         # Load predefined classes to the list
         self.loadPredefinedClasses(defaultPrefdefClassFile)
+        self.loadPredefinedAttributes(defaultPrefdefAttrFile)
 
         # Main widgets and related state.
         self.labelDialog = LabelDialog(parent=self, listItem=self.labelHist)
@@ -134,16 +135,23 @@ class MainWindow(QMainWindow, WindowMixin):
         useDefaultLabelContainer = QWidget()
         useDefaultLabelContainer.setLayout(useDefaultLabelQHBoxLayout)
 
-        # Create a widget for edit and diffc button
-        self.diffcButton = QCheckBox(u'difficult')
-        self.diffcButton.setChecked(False)
-        self.diffcButton.stateChanged.connect(self.btnstate)
+
         self.editButton = QToolButton()
         self.editButton.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
 
         # Add some of widgets to listLayout
         listLayout.addWidget(self.editButton)
-        listLayout.addWidget(self.diffcButton)
+
+        # Create a widget for edit and diffc button
+        self.attr_buttons = []
+        for item in self.attributes:
+            key = item + 'Button'
+            box = QCheckBox(item)
+            box.setChecked(False)
+            box.stateChanged.connect(partial(self.btnstate, box))
+            listLayout.addWidget(box)
+            self.attr_buttons.append(box)
+
         listLayout.addWidget(useDefaultLabelContainer)
 
         # Create and add a widget for showing current label items
@@ -266,6 +274,12 @@ class MainWindow(QMainWindow, WindowMixin):
                          'Ctrl+A', 'hide', u'Show all Boxs',
                          enabled=False)
 
+        toggle_buttons = []
+        for i, btn in enumerate(self.attr_buttons):
+            toggle_buttons.append(action('Toggle Attribute ' + btn.text(), partial(self.toggleAttrButtn, btn),
+                   str(i+1), 'hide', u'Toggle',
+                   enabled=False))
+
         help = action('&Tutorial', self.showTutorialDialog, None, 'help', u'Show demos')
         showInfo = action('&Information', self.showInfoDialog, None, 'help', u'Information')
 
@@ -341,7 +355,7 @@ class MainWindow(QMainWindow, WindowMixin):
                                                delete, shapeLineColor, shapeFillColor),
                               onLoadActive=(
                                   close, create, createMode, editMode),
-                              onShapesPresent=(saveAs, hideAll, showAll))
+                              onShapesPresent=(saveAs, hideAll, showAll, *toggle_buttons))
 
         self.menus = struct(
             file=self.menu('&File'),
@@ -370,6 +384,7 @@ class MainWindow(QMainWindow, WindowMixin):
             self.singleClassMode,
             labels, advancedMode, None,
             hideAll, showAll, None,
+            *toggle_buttons, None,
             zoomIn, zoomOut, zoomOrg, None,
             fitWindow, fitWidth))
 
@@ -404,7 +419,6 @@ class MainWindow(QMainWindow, WindowMixin):
         self.zoom_level = 100
         self.fit_window = False
         # Add Chris
-        self.difficult = False
 
         ## Fix the compatible issue for qt4 and qt5. Convert the QStringList to python list
         if settings.get(SETTING_RECENT_FILES):
@@ -431,7 +445,7 @@ class MainWindow(QMainWindow, WindowMixin):
         Shape.fill_color = self.fillColor = QColor(settings.get(SETTING_FILL_COLOR, DEFAULT_FILL_COLOR))
         self.canvas.setDrawingColor(self.lineColor)
         # Add chris
-        Shape.difficult = self.difficult
+        Shape.attributes = self.attributes
 
         def xbool(x):
             if isinstance(x, QVariant):
@@ -629,8 +643,8 @@ class MainWindow(QMainWindow, WindowMixin):
                 self.loadFile(filename)
 
     # Add chris
-    def btnstate(self, item= None):
-        """ Function to handle difficult examples
+    def btnstate(self, caller=None, item= None):
+        """ Function to handle atribute
         Update on each object """
         if not self.canvas.editing():
             return
@@ -639,21 +653,32 @@ class MainWindow(QMainWindow, WindowMixin):
         if not item: # If not selected Item, take the first one
             item = self.labelList.item(self.labelList.count()-1)
 
-        difficult = self.diffcButton.isChecked()
-
         try:
             shape = self.itemsToShapes[item]
+            if shape:
+                self.update_shape_attribute(shape, caller.text(), caller.isChecked())
         except:
             pass
-        # Checked and Update
-        try:
-            if difficult != shape.difficult:
-                shape.difficult = difficult
-                self.setDirty()
-            else:  # User probably changed item visibility
-                self.canvas.setShapeVisible(shape, item.checkState() == Qt.Checked)
-        except:
-            pass
+
+    def toggleAttrButtn(self, btn):
+        shape = self.canvas.selectedShape
+
+        if not shape:
+            return
+
+        attr = btn.text()
+        value = btn.isChecked()
+
+        value = not value
+
+        btn.setChecked(value)
+        self.update_shape_attribute(self.canvas.selectedShape, attr, value)
+
+
+    def update_shape_attribute(self, shape, key, value):
+        if value != shape.attributes.get(key):
+            shape.attributes[key] = value
+            self.setDirty()
 
     # React to canvas signals.
     def shapeSelectionChanged(self, selected=False):
@@ -693,11 +718,11 @@ class MainWindow(QMainWindow, WindowMixin):
 
     def loadLabels(self, shapes):
         s = []
-        for label, points, line_color, fill_color, difficult in shapes:
+        for label, points, line_color, fill_color, attributes in shapes:
             shape = Shape(label=label)
             for x, y in points:
                 shape.addPoint(QPointF(x, y))
-            shape.difficult = difficult
+            shape.attributes = attributes
             shape.close()
             s.append(shape)
 
@@ -727,7 +752,7 @@ class MainWindow(QMainWindow, WindowMixin):
                         fill_color=s.fill_color.getRgb(),
                         points=[(p.x(), p.y()) for p in s.points],
                        # add chris
-                        difficult = s.difficult)
+                        attributes = s.attributes)
 
         shapes = [format_shape(shape) for shape in self.canvas.shapes]
         # Can add differrent annotation formats here
@@ -755,8 +780,10 @@ class MainWindow(QMainWindow, WindowMixin):
             self._noSelectionSlot = True
             self.canvas.selectShape(self.itemsToShapes[item])
             shape = self.itemsToShapes[item]
-            # Add Chris
-            self.diffcButton.setChecked(shape.difficult)
+
+            for btn in self.attr_buttons:
+                key = btn.text()
+                btn.setChecked(bool(shape.attributes.get(key)))
 
     def labelItemChanged(self, item):
         shape = self.itemsToShapes[item]
@@ -788,8 +815,10 @@ class MainWindow(QMainWindow, WindowMixin):
         else:
             text = self.defaultLabelTextLine.text()
 
-        # Add Chris
-        self.diffcButton.setChecked(False)
+        for btn in self.attr_buttons:
+            key = btn.text()
+            btn.setChecked(False)
+
         if text is not None:
             self.prevLabelText = text
             generate_color = generateColorByText(text)
@@ -1305,7 +1334,7 @@ class MainWindow(QMainWindow, WindowMixin):
         self.setDirty()
 
     def loadPredefinedClasses(self, predefClassesFile):
-        if os.path.exists(predefClassesFile) is True:
+        if os.path.exists(predefClassesFile):
             with codecs.open(predefClassesFile, 'r', 'utf8') as f:
                 for line in f:
                     line = line.strip()
@@ -1314,10 +1343,15 @@ class MainWindow(QMainWindow, WindowMixin):
                     else:
                         self.labelHist.append(line)
 
+    def loadPredefinedAttributes(self, predefAttributesFile):
+        if os.path.exists(predefAttributesFile):
+            with codecs.open(predefAttributesFile, 'r', 'utf8') as f:
+                self.attributes = [l.strip() for l in f]
+
     def loadPascalXMLByFilename(self, xmlPath):
-        if self.filePath is None:
+        if not self.filePath:
             return
-        if os.path.isfile(xmlPath) is False:
+        if not os.path.isfile(xmlPath):
             return
 
         tVocParseReader = PascalVocReader(xmlPath)
@@ -1351,7 +1385,10 @@ def get_main_app(argv=[]):
     win = MainWindow(argv[1] if len(argv) >= 2 else None,
                      argv[2] if len(argv) >= 3 else os.path.join(
                          os.path.dirname(sys.argv[0]),
-                         'data', 'predefined_classes.txt'))
+                         'data', 'predefined_classes.txt'),
+                     argv[3] if len(argv) >= 4 else os.path.join(
+                         os.path.dirname(sys.argv[0]),
+                         'data', 'predefined_attributes.txt'))
     win.show()
     return app, win
 
