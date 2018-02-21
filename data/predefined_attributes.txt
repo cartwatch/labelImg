@@ -1,2 +1,4 @@
 difficult
 unclear
+full
+confidence

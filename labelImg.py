@@ -276,9 +276,11 @@ class MainWindow(QMainWindow, WindowMixin):
 
         toggle_buttons = []
         for i, btn in enumerate(self.attr_buttons):
-            toggle_buttons.append(action('Toggle Attribute ' + btn.text(), partial(self.toggleAttrButtn, btn),
+            toggle_buttons.append(action('Toggle Attribute ' + str(btn.text()), partial(self.toggleAttrButtn, btn),
                    str(i+1), 'hide', u'Toggle',
                    enabled=False))
+                   
+        toggle_buttons = tuple(toggle_buttons) 
 
         help = action('&Tutorial', self.showTutorialDialog, None, 'help', u'Show demos')
         showInfo = action('&Information', self.showInfoDialog, None, 'help', u'Information')
@@ -355,7 +357,7 @@ class MainWindow(QMainWindow, WindowMixin):
                                                delete, shapeLineColor, shapeFillColor),
                               onLoadActive=(
                                   close, create, createMode, editMode),
-                              onShapesPresent=(saveAs, hideAll, showAll, *toggle_buttons))
+                              onShapesPresent=(saveAs, hideAll, showAll) + toggle_buttons)
 
         self.menus = struct(
             file=self.menu('&File'),
@@ -383,8 +385,8 @@ class MainWindow(QMainWindow, WindowMixin):
             self.autoSaving,
             self.singleClassMode,
             labels, advancedMode, None,
-            hideAll, showAll, None,
-            *toggle_buttons, None,
+            hideAll, showAll, None) +
+            toggle_buttons + (None,
             zoomIn, zoomOut, zoomOrg, None,
             fitWindow, fitWidth))
 
@@ -656,7 +658,7 @@ class MainWindow(QMainWindow, WindowMixin):
         try:
             shape = self.itemsToShapes[item]
             if shape:
-                self.update_shape_attribute(shape, caller.text(), caller.isChecked())
+                self.update_shape_attribute(shape, str(caller.text()), caller.isChecked())
         except:
             pass
 
@@ -666,7 +668,7 @@ class MainWindow(QMainWindow, WindowMixin):
         if not shape:
             return
 
-        attr = btn.text()
+        attr = str(btn.text())
         value = btn.isChecked()
 
         value = not value
@@ -782,7 +784,7 @@ class MainWindow(QMainWindow, WindowMixin):
             shape = self.itemsToShapes[item]
 
             for btn in self.attr_buttons:
-                key = btn.text()
+                key = str(btn.text())
                 btn.setChecked(bool(shape.attributes.get(key)))
 
     def labelItemChanged(self, item):
@@ -816,7 +818,7 @@ class MainWindow(QMainWindow, WindowMixin):
             text = self.defaultLabelTextLine.text()
 
         for btn in self.attr_buttons:
-            key = btn.text()
+            key = str(btn.text())
             btn.setChecked(False)
 
         if text is not None:
