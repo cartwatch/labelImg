@@ -174,7 +174,6 @@ class PascalVocReader:
 
             for elem in obj.iter():
                 t = elem.tag
-                print(t)
 
                 if t in ['bndbox', 'object']:
                     continue
