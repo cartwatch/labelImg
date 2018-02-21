@@ -108,7 +108,7 @@ class PascalVocWriter:
                     e = SubElement(bndbox, key)
                     e.text = str(obj[key])
                 elif key not in ['truncated', 'pose']:
-                    attr = SubElement(object_item, key)
+                    attr = SubElement(object_item, str(key))
                     attr.text = parse_bool(value)
 
     def save(self, targetFile=None):
@@ -175,6 +175,7 @@ class PascalVocReader:
             for elem in obj.iter():
                 t = elem.tag
                 print(t)
+
                 if t in ['bndbox', 'object']:
                     continue
                 elif t in corners.keys():
