@@ -1,7 +1,9 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 import codecs
+import distutils.spawn
 import os.path
+import platform
 import re
 import sys
 import subprocess
@@ -38,6 +40,8 @@ from libs.labelFile import LabelFile, LabelFileError
 from libs.toolBar import ToolBar
 from libs.pascal_voc_io import PascalVocReader
 from libs.pascal_voc_io import XML_EXT
+from libs.yolo_io import YoloReader
+from libs.yolo_io import TXT_EXT
 from libs.ustr import ustr
 from libs.version import __version__
 
@@ -85,7 +89,7 @@ class HashableQListWidgetItem(QListWidgetItem):
 class MainWindow(QMainWindow, WindowMixin):
     FIT_WINDOW, FIT_WIDTH, MANUAL_ZOOM = list(range(3))
 
-    def __init__(self, defaultFilename=None, defaultPrefdefClassFile=None, defaultPrefdefAttrFile=None):
+    def __init__(self, defaultFilename=None, defaultPrefdefClassFile=None, defaultPrefdefAttrFile=None, defaultSaveDir=None):
         super(MainWindow, self).__init__()
         self.setWindowTitle(__appname__)
 
@@ -95,8 +99,10 @@ class MainWindow(QMainWindow, WindowMixin):
         settings = self.settings
 
         # Save as Pascal voc xml
-        self.defaultSaveDir = None
+        self.defaultSaveDir = defaultSaveDir
         self.usingPascalVocFormat = True
+        self.usingYoloFormat = False
+
         # For loading all image under a directory
         self.mImgList = []
         self.dirname = None
@@ -108,7 +114,7 @@ class MainWindow(QMainWindow, WindowMixin):
 
         self._noSelectionSlot = False
         self._beginner = True
-        self.screencastViewer = "firefox"
+        self.screencastViewer = self.getAvailableScreencastViewer()
         self.screencast = "https://youtu.be/p0nR2YsCY_U"
 
         # Load predefined classes to the list
@@ -240,6 +246,9 @@ class MainWindow(QMainWindow, WindowMixin):
         save = action('&Save', self.saveFile,
                       'Ctrl+S', 'save', u'Save labels to file', enabled=False)
 
+        save_format = action('&PascalVOC', self.change_format,
+                      'Ctrl+', 'format_voc', u'Change save format', enabled=True)
+
         saveAs = action('&Save As', self.saveFileAs,
                         'Ctrl+Shift+S', 'save-as', u'Save labels to a different file', enabled=False)
 
@@ -279,8 +288,8 @@ class MainWindow(QMainWindow, WindowMixin):
             toggle_buttons.append(action('Toggle Attribute ' + str(btn.text()), partial(self.toggleAttrButtn, btn),
                    str(i+1), 'hide', u'Toggle',
                    enabled=False))
-                   
-        toggle_buttons = tuple(toggle_buttons) 
+
+        toggle_buttons = tuple(toggle_buttons)
 
         help = action('&Tutorial', self.showTutorialDialog, None, 'help', u'Show demos')
         showInfo = action('&Information', self.showInfoDialog, None, 'help', u'Information')
@@ -340,7 +349,7 @@ class MainWindow(QMainWindow, WindowMixin):
             self.popLabelListMenu)
 
         # Store actions for further handling.
-        self.actions = struct(save=save, saveAs=saveAs, open=open, close=close, resetAll = resetAll,
+        self.actions = struct(save=save, save_format=save_format, saveAs=saveAs, open=open, close=close, resetAll = resetAll,
                               lineColor=color1, create=create, delete=delete, edit=edit, copy=copy,
                               createMode=createMode, editMode=editMode, advancedMode=advancedMode,
                               shapeLineColor=shapeLineColor, shapeFillColor=shapeFillColor,
@@ -377,13 +386,20 @@ class MainWindow(QMainWindow, WindowMixin):
         self.singleClassMode.setCheckable(True)
         self.singleClassMode.setChecked(settings.get(SETTING_SINGLE_CLASS, False))
         self.lastLabel = None
+        # Add option to enable/disable labels being painted at the top of bounding boxes
+        self.paintLabelsOption = QAction("Paint Labels", self)
+        self.paintLabelsOption.setShortcut("Ctrl+Shift+P")
+        self.paintLabelsOption.setCheckable(True)
+        self.paintLabelsOption.setChecked(settings.get(SETTING_PAINT_LABEL, False))
+        self.paintLabelsOption.triggered.connect(self.togglePaintLabelsOption)
 
         addActions(self.menus.file,
-                   (open, opendir, changeSavedir, openAnnotation, self.menus.recentFiles, save, saveAs, close, resetAll, quit))
+                   (open, opendir, changeSavedir, openAnnotation, self.menus.recentFiles, save, save_format, saveAs, close, resetAll, quit))
         addActions(self.menus.help, (help, showInfo))
         addActions(self.menus.view, (
             self.autoSaving,
             self.singleClassMode,
+            self.paintLabelsOption,
             labels, advancedMode, None,
             hideAll, showAll, None) +
             toggle_buttons + (None,
@@ -400,11 +416,11 @@ class MainWindow(QMainWindow, WindowMixin):
 
         self.tools = self.toolbar('Tools')
         self.actions.beginner = (
-            open, opendir, changeSavedir, openNextImg, openPrevImg, verify, save, None, create, copy, delete, None,
+            open, opendir, changeSavedir, openNextImg, openPrevImg, verify, save, save_format, None, create, copy, delete, None,
             zoomIn, zoom, zoomOut, fitWindow, fitWidth)
 
         self.actions.advanced = (
-            open, opendir, changeSavedir, openNextImg, openPrevImg, save, None,
+            open, opendir, changeSavedir, openNextImg, openPrevImg, save, save_format, None,
             createMode, editMode, None,
             hideAll, showAll)
 
@@ -436,7 +452,7 @@ class MainWindow(QMainWindow, WindowMixin):
         self.move(position)
         saveDir = ustr(settings.get(SETTING_SAVE_DIR, None))
         self.lastOpenDir = ustr(settings.get(SETTING_LAST_OPEN_DIR, None))
-        if saveDir is not None and os.path.exists(saveDir):
+        if self.defaultSaveDir is None and saveDir is not None and os.path.exists(saveDir):
             self.defaultSaveDir = saveDir
             self.statusBar().showMessage('%s started. Annotation will be saved to %s' %
                                          (__appname__, self.defaultSaveDir))
@@ -481,6 +497,24 @@ class MainWindow(QMainWindow, WindowMixin):
             self.openDirDialog(dirpath=self.filePath)
 
     ## Support Functions ##
+    def set_format(self, save_format):
+        if save_format == FORMAT_PASCALVOC:
+            self.actions.save_format.setText(FORMAT_PASCALVOC)
+            self.actions.save_format.setIcon(newIcon("format_voc"))
+            self.usingPascalVocFormat = True
+            self.usingYoloFormat = False
+            LabelFile.suffix = XML_EXT
+
+        elif save_format == FORMAT_YOLO:
+            self.actions.save_format.setText(FORMAT_YOLO)
+            self.actions.save_format.setIcon(newIcon("format_yolo"))
+            self.usingPascalVocFormat = False
+            self.usingYoloFormat = True
+            LabelFile.suffix = TXT_EXT
+
+    def change_format(self):
+        if self.usingPascalVocFormat: self.set_format(FORMAT_YOLO)
+        elif self.usingYoloFormat: self.set_format(FORMAT_PASCALVOC)
 
     def noShapes(self):
         return not self.itemsToShapes
@@ -570,9 +604,19 @@ class MainWindow(QMainWindow, WindowMixin):
     def advanced(self):
         return not self.beginner()
 
+    def getAvailableScreencastViewer(self):
+        osName = platform.system()
+
+        if osName == 'Windows':
+            return ['C:\\Program Files\\Internet Explorer\\iexplore.exe']
+        elif osName == 'Linux':
+            return ['xdg-open']
+        elif osName == 'Darwin':
+            return ['open', '-a', 'Safari']
+
     ## Callbacks ##
     def showTutorialDialog(self):
-        subprocess.Popen([self.screencastViewer, self.screencast])
+        subprocess.Popen(self.screencastViewer + [self.screencast])
 
     def showInfoDialog(self):
         msg = u'Name:{0} \nApp Version:{1} \n{2} '.format(__appname__, __version__, sys.version_info)
@@ -699,6 +743,7 @@ class MainWindow(QMainWindow, WindowMixin):
         self.actions.shapeFillColor.setEnabled(selected)
 
     def addLabel(self, shape):
+        shape.paintLabel = self.paintLabelsOption.isChecked()
         item = HashableQListWidgetItem(shape.label)
         item.setFlags(item.flags() | Qt.ItemIsUserCheckable)
         item.setCheckState(Qt.Checked)
@@ -760,8 +805,16 @@ class MainWindow(QMainWindow, WindowMixin):
         # Can add differrent annotation formats here
         try:
             if self.usingPascalVocFormat is True:
+                if ustr(annotationFilePath[-4:]) != ".xml":
+                    annotationFilePath += XML_EXT
                 print ('Img: ' + self.filePath + ' -> Its xml: ' + annotationFilePath)
                 self.labelFile.savePascalVocFormat(annotationFilePath, shapes, self.filePath, self.imageData,
+                                                   self.lineColor.getRgb(), self.fillColor.getRgb())
+            elif self.usingYoloFormat is True:
+                if annotationFilePath[-4:] != ".txt":
+                    annotationFilePath += TXT_EXT
+                print ('Img: ' + self.filePath + ' -> Its txt: ' + annotationFilePath)
+                self.labelFile.saveYoloFormat(annotationFilePath, shapes, self.filePath, self.imageData, self.labelHist,
                                                    self.lineColor.getRgb(), self.fillColor.getRgb())
             else:
                 self.labelFile.save(annotationFilePath, shapes, self.filePath, self.imageData,
@@ -929,7 +982,7 @@ class MainWindow(QMainWindow, WindowMixin):
             filePath = self.settings.get(SETTING_FILENAME)
 
         # Make sure that filePath is a regular python string, rather than QString
-        filePath = str(filePath)
+        filePath = ustr(filePath)
 
         unicodeFilePath = ustr(filePath)
         # Tzutalin 20160906 : Add file list and dock to move faster
@@ -953,11 +1006,13 @@ class MainWindow(QMainWindow, WindowMixin):
                 self.imageData = self.labelFile.imageData
                 self.lineColor = QColor(*self.labelFile.lineColor)
                 self.fillColor = QColor(*self.labelFile.fillColor)
+                self.canvas.verified = self.labelFile.verified
             else:
                 # Load image:
                 # read data first and store for saving into label file.
                 self.imageData = read(unicodeFilePath, None)
                 self.labelFile = None
+                self.canvas.verified = False
 
             image = QImage.fromData(self.imageData)
             if image.isNull():
@@ -979,16 +1034,27 @@ class MainWindow(QMainWindow, WindowMixin):
             self.toggleActions(True)
 
             # Label xml file and show bound box according to its filename
-            if self.usingPascalVocFormat is True:
-                if self.defaultSaveDir is not None:
-                    basename = os.path.basename(
-                        os.path.splitext(self.filePath)[0]) + XML_EXT
-                    xmlPath = os.path.join(self.defaultSaveDir, basename)
+            # if self.usingPascalVocFormat is True:
+            if self.defaultSaveDir is not None:
+                basename = os.path.basename(
+                    os.path.splitext(self.filePath)[0])
+                xmlPath = os.path.join(self.defaultSaveDir, basename + XML_EXT)
+                txtPath = os.path.join(self.defaultSaveDir, basename + TXT_EXT)
+
+                """Annotation file priority:
+                PascalXML > YOLO
+                """
+                if os.path.isfile(xmlPath):
                     self.loadPascalXMLByFilename(xmlPath)
-                else:
-                    xmlPath = os.path.splitext(filePath)[0] + XML_EXT
-                    if os.path.isfile(xmlPath):
-                        self.loadPascalXMLByFilename(xmlPath)
+                elif os.path.isfile(txtPath):
+                    self.loadYOLOTXTByFilename(txtPath)
+            else:
+                xmlPath = os.path.splitext(filePath)[0] + XML_EXT
+                txtPath = os.path.splitext(filePath)[0] + TXT_EXT
+                if os.path.isfile(xmlPath):
+                    self.loadPascalXMLByFilename(xmlPath)
+                elif os.path.isfile(txtPath):
+                    self.loadYOLOTXTByFilename(txtPath)
 
             self.setWindowTitle(__appname__ + ' ' + filePath)
 
@@ -1063,6 +1129,7 @@ class MainWindow(QMainWindow, WindowMixin):
 
         settings[SETTING_AUTO_SAVE] = self.autoSaving.isChecked()
         settings[SETTING_SINGLE_CLASS] = self.singleClassMode.isChecked()
+        settings[SETTING_PAINT_LABEL] = self.paintLabelsOption.isChecked()
         settings.save()
     ## User Dialogs ##
 
@@ -1071,7 +1138,7 @@ class MainWindow(QMainWindow, WindowMixin):
             self.loadFile(filename)
 
     def scanAllImages(self, folderPath):
-        extensions = ['.jpeg', '.jpg', '.png', '.bmp']
+        extensions = ['.%s' % fmt.data().decode("ascii").lower() for fmt in QImageReader.supportedImageFormats()]
         images = []
 
         for root, dirs, files in os.walk(folderPath):
@@ -1154,7 +1221,10 @@ class MainWindow(QMainWindow, WindowMixin):
                 # If the labelling file does not exist yet, create if and
                 # re-save it with the verified attribute.
                 self.saveFile()
-                self.labelFile.toggleVerify()
+                if self.labelFile != None:
+                    self.labelFile.toggleVerify()
+                else:
+                    return
 
             self.canvas.verified = self.labelFile.verified
             self.paintCanvas()
@@ -1228,13 +1298,13 @@ class MainWindow(QMainWindow, WindowMixin):
         if self.defaultSaveDir is not None and len(ustr(self.defaultSaveDir)):
             if self.filePath:
                 imgFileName = os.path.basename(self.filePath)
-                savedFileName = os.path.splitext(imgFileName)[0] + XML_EXT
+                savedFileName = os.path.splitext(imgFileName)[0]
                 savedPath = os.path.join(ustr(self.defaultSaveDir), savedFileName)
                 self._saveFile(savedPath)
         else:
             imgFileDir = os.path.dirname(self.filePath)
             imgFileName = os.path.basename(self.filePath)
-            savedFileName = os.path.splitext(imgFileName)[0] + XML_EXT
+            savedFileName = os.path.splitext(imgFileName)[0]
             savedPath = os.path.join(imgFileDir, savedFileName)
             self._saveFile(savedPath if self.labelFile
                            else self.saveFileDialog())
@@ -1254,7 +1324,8 @@ class MainWindow(QMainWindow, WindowMixin):
         dlg.selectFile(filenameWithoutExtension)
         dlg.setOption(QFileDialog.DontUseNativeDialog, False)
         if dlg.exec_():
-            return dlg.selectedFiles()[0]
+            fullFilePath = ustr(dlg.selectedFiles()[0])
+            return os.path.splitext(fullFilePath)[0] # Return file path without the extension.
         return ''
 
     def _saveFile(self, annotationFilePath):
@@ -1356,11 +1427,30 @@ class MainWindow(QMainWindow, WindowMixin):
         if not os.path.isfile(xmlPath):
             return
 
+        self.set_format(FORMAT_PASCALVOC)
+
         tVocParseReader = PascalVocReader(xmlPath)
         shapes = tVocParseReader.getShapes()
         self.loadLabels(shapes)
         self.canvas.verified = tVocParseReader.verified
 
+    def loadYOLOTXTByFilename(self, txtPath):
+        if self.filePath is None:
+            return
+        if os.path.isfile(txtPath) is False:
+            return
+
+        self.set_format(FORMAT_YOLO)
+        tYoloParseReader = YoloReader(txtPath, self.image)
+        shapes = tYoloParseReader.getShapes()
+        print (shapes)
+        self.loadLabels(shapes)
+        self.canvas.verified = tYoloParseReader.verified
+
+    def togglePaintLabelsOption(self):
+        paintLabelsOptionChecked = self.paintLabelsOption.isChecked()
+        for shape in self.canvas.shapes:
+            shape.paintLabel = paintLabelsOptionChecked
 
 def inverted(color):
     return QColor(*[255 - v for v in color.getRgb()])
@@ -1383,22 +1473,23 @@ def get_main_app(argv=[]):
     app.setApplicationName(__appname__)
     app.setWindowIcon(newIcon("app"))
     # Tzutalin 201705+: Accept extra agruments to change predefined class file
-    # Usage : labelImg.py image predefClassFile
+    # Usage : labelImg.py image predefClassFile saveDir
     win = MainWindow(argv[1] if len(argv) >= 2 else None,
                      argv[2] if len(argv) >= 3 else os.path.join(
                          os.path.dirname(sys.argv[0]),
                          'data', 'predefined_classes.txt'),
                      argv[3] if len(argv) >= 4 else os.path.join(
                          os.path.dirname(sys.argv[0]),
-                         'data', 'predefined_attributes.txt'))
+                         'data', 'predefined_attributes.txt'),
+                     argv[4] if len(argv) >= 5 else None)
     win.show()
     return app, win
 
 
-def main(argv=[]):
+def main():
     '''construct main app and run it'''
-    app, _win = get_main_app(argv)
+    app, _win = get_main_app(sys.argv)
     return app.exec_()
 
 if __name__ == '__main__':
-    sys.exit(main(sys.argv))
+    sys.exit(main())
